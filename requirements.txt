@@ -16,6 +16,7 @@ webdataset
 datasets
 huggingface_hub
 pyarrow
+img2dataset
 
 # Image processing
 pillow==12.2.0

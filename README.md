@@ -253,6 +253,46 @@ python tools/prepare_cc12m_chunks.py \
 
 With the default settings, the chunks should live at `/path/to/dataset/root/cc12m_tensor_chunks`.
 
+For large runs, the public CC12M image URLs are often stale or access-denied.
+As an optional, more robust route, thanks to [@kpetrovicc](https://github.com/kpetrovicc),
+you can let `img2dataset` handle parallel downloads and per-shard failure
+logging, then convert the downloaded WebDataset shards into the same
+`chunk_*.pt` tensor format:
+
+```bash
+DATA_ROOT=/path/to/dataset/root
+WORK="$DATA_ROOT/cc12m_prep"
+
+hf download CaptionEmporium/conceptual-captions-cc12m-llavanext \
+  --repo-type dataset \
+  --include "*.jsonl.gz" \
+  --local-dir "$WORK/meta"
+
+python tools/cc12m_jsonl_to_parquet.py \
+  --jsonl "$WORK/meta/train.jsonl.gz" \
+  --out "$WORK/parquet/metadata.parquet"
+
+img2dataset \
+  --url_list "$WORK/parquet" \
+  --input_format parquet \
+  --url_col url \
+  --caption_col caption_llava \
+  --output_folder "$WORK/wds" \
+  --output_format webdataset \
+  --image_size 512 \
+  --resize_mode center_crop \
+  --encode_format jpg \
+  --processes_count 16 \
+  --thread_count 64 \
+  --number_sample_per_shard 10000 \
+  --enable_wandb False \
+  --retries 2
+
+python tools/cc12m_wds_to_chunks.py \
+  --wds "$WORK/wds" \
+  --out "$DATA_ROOT/cc12m_tensor_chunks"
+```
+
 **120K mix.** Fine-tuning uses the 120K mix WebDataset layout assembled from three public shards:
 
 - [`BLIP3o/BLIP3o-60k`](https://huggingface.co/datasets/BLIP3o/BLIP3o-60k)

@@ -58,6 +58,18 @@ def write_chunk(images, captions, out_dir: Path, chunk_idx: int, tokenizer, prom
     return path
 
 
+def make_webdataset(shards: list[str]):
+    try:
+        return wds.WebDataset(
+            shards,
+            handler=wds.warn_and_continue,
+            empty_check=False,
+            shardshuffle=False,
+        )
+    except TypeError:
+        return wds.WebDataset(shards, handler=wds.warn_and_continue, shardshuffle=False)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert img2dataset WebDataset shards into MiniT2I chunk_*.pt tensor chunks "
@@ -85,7 +97,7 @@ def main():
     transform = build_transform(args.image_size)
 
     dataset = (
-        wds.WebDataset(shards, handler=wds.warn_and_continue, empty_check=False, shardshuffle=False)
+        make_webdataset(shards)
         .decode("pil", handler=wds.warn_and_continue)
         .map(lambda s: to_sample(s, transform), handler=wds.warn_and_continue)
     )
