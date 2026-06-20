@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import io
+import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -20,26 +22,32 @@ def first_existing(row: dict, candidates: list[str]) -> str:
     raise KeyError(f"none of these columns were found: {', '.join(candidates)}")
 
 
-def to_image(value) -> Image.Image:
+def to_image(value, *, timeout: int = 20) -> Image.Image:
     if isinstance(value, Image.Image):
         return value.convert("RGB")
     if isinstance(value, dict) and "path" in value:
         return Image.open(value["path"]).convert("RGB")
     if isinstance(value, str) and value.startswith(("http://", "https://")):
         request = urllib.request.Request(value, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return Image.open(io.BytesIO(response.read())).convert("RGB")
     return Image.open(value).convert("RGB")
 
 
-def write_chunk(rows, out_dir: Path, chunk_idx: int, tokenizer, transform, image_column: str, caption_column: str, prompt_length: int):
-    images = []
-    captions = []
-    for row in rows:
-        image = to_image(row[image_column])
-        images.append(transform(image))
-        captions.append(str(row[caption_column]))
+def to_image_with_retries(value, *, timeout: int, retries: int, retry_delay: float) -> Image.Image:
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return to_image(value, timeout=timeout)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries and retry_delay > 0:
+                time.sleep(retry_delay)
+    assert last_exc is not None
+    raise last_exc
 
+
+def write_chunk(images, captions, out_dir: Path, chunk_idx: int, tokenizer, prompt_length: int):
     tokens = tokenizer(
         captions,
         max_length=prompt_length,
@@ -70,6 +78,11 @@ def main():
     parser.add_argument("--prompt-length", type=int, default=256)
     parser.add_argument("--tokenizer", default="google/flan-t5-large")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--timeout", type=int, default=20)
+    parser.add_argument("--retries", type=int, default=0, help="Retry each failed image download this many times before skipping it.")
+    parser.add_argument("--retry-delay", type=float, default=0.0, help="Seconds to sleep between retries.")
+    parser.add_argument("--max-download-failures", type=int, default=0, help="Abort after this many image load failures. 0 means keep skipping bad samples.")
+    parser.add_argument("--log-every", type=int, default=1000, help="Print progress every N input rows. 0 disables periodic progress logs.")
     args = parser.parse_args()
 
     from datasets import load_dataset
@@ -91,27 +104,55 @@ def main():
     image_candidates = ["image", "jpg", "jpeg", "png", "url"]
     caption_candidates = ["caption_llava", "caption_llava_short", "text", "caption", "llava_caption", "recaption", "re_caption", "prompt"]
 
-    rows = []
+    images = []
+    captions = []
     chunk_idx = 0
     total = 0
+    kept = 0
+    skipped = 0
     for row in dataset:
         if not image_column:
             image_column = first_existing(row, image_candidates)
         if not caption_column:
             caption_column = first_existing(row, caption_candidates)
-        rows.append(row)
         total += 1
-        if len(rows) == args.chunk_size:
-            path = write_chunk(rows, out_dir, chunk_idx, tokenizer, transform, image_column, caption_column, args.prompt_length)
-            print(f"wrote {path} ({total} samples)", flush=True)
-            rows.clear()
+
+        try:
+            image = to_image_with_retries(
+                row[image_column],
+                timeout=args.timeout,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+            )
+        except Exception as exc:
+            skipped += 1
+            key = row.get("key", total)
+            print(f"skipping sample {key}: failed to load image from {row[image_column]!r}: {exc}", file=sys.stderr, flush=True)
+            if args.max_download_failures and skipped >= args.max_download_failures:
+                raise RuntimeError(f"reached --max-download-failures={args.max_download_failures}") from exc
+            if args.limit and total >= args.limit:
+                break
+            continue
+
+        images.append(transform(image))
+        captions.append(str(row[caption_column]))
+        kept += 1
+
+        if len(images) == args.chunk_size:
+            path = write_chunk(images, captions, out_dir, chunk_idx, tokenizer, args.prompt_length)
+            print(f"wrote {path} ({kept} kept, {skipped} skipped, {total} seen)", flush=True)
+            images.clear()
+            captions.clear()
             chunk_idx += 1
+        if args.log_every and total % args.log_every == 0:
+            print(f"processed {total} rows ({kept} kept, {skipped} skipped)", flush=True)
         if args.limit and total >= args.limit:
             break
 
-    if rows:
-        path = write_chunk(rows, out_dir, chunk_idx, tokenizer, transform, image_column, caption_column, args.prompt_length)
-        print(f"wrote {path} ({total} samples)", flush=True)
+    if images:
+        path = write_chunk(images, captions, out_dir, chunk_idx, tokenizer, args.prompt_length)
+        print(f"wrote {path} ({kept} kept, {skipped} skipped, {total} seen)", flush=True)
+    print(f"done: {kept} kept, {skipped} skipped, {total} seen", flush=True)
 
 
 if __name__ == "__main__":
