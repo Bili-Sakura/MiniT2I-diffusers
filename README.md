@@ -60,25 +60,28 @@ For checkpoints, please refer to the [Hugging Face repository](https://huggingfa
 ```text
 .
 ├── main.py                     # unified train/eval entry point
+├── setup.py                    # installable diffusers-style MiniT2I package
 ├── configs/                    # pretraining, fine-tuning, and eval configs
-├── mini_t2i/                    # PyTorch training and benchmark evaluation code
-├── diffusers/                  # custom Diffusers pipeline source
+├── src/diffusers/              # native diffusers integration (models, schedulers, pipelines)
+├── scripts/                    # checkpoint conversion and sampling helpers
+├── mini_t2i/                   # PyTorch training and benchmark evaluation code
 ├── lora/                       # LoRA adaptation entry points
 └── tools/                      # dataset preparation helpers
 ```
 
 ## Installation
 
-Create a Python environment with a CUDA-enabled PyTorch build, then install the dependencies:
+Create a Python environment with a CUDA-enabled PyTorch build, then install the repository:
 
 ```bash
 git clone <REPO_URL>
 cd minit2i-torch
 
 python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
-For inference-only use, the core dependencies are `torch`, `diffusers`, `transformers`, `safetensors`, `pillow`, and `huggingface_hub`.
+For inference-only use, the core dependencies are `torch`, `diffusers`, `transformers`, `safetensors`, `pillow`, and `huggingface_hub`. The editable install exposes the native MiniT2I diffusers classes from `src/diffusers`.
 
 Edit the user settings at the top of `mini_t2i/settings.py` before training or evaluation:
 
@@ -101,33 +104,40 @@ Try MiniT2I without setting up training data in the [Colab demo](https://colab.r
 
 ```python
 import torch
-from diffusers import DiffusionPipeline
+from diffusers import MiniT2ITextToImagePipeline
 
 HUB_MODEL_ID = "MiniT2I/MiniT2I"
 
-pipe = DiffusionPipeline.from_pretrained(
+pipe = MiniT2ITextToImagePipeline.from_pretrained(
     HUB_MODEL_ID,
-    custom_pipeline=HUB_MODEL_ID,
-    trust_remote_code=True,
+    model_type="b16",
+    torch_dtype=torch.bfloat16,
 )
+pipe.to("cuda")
 
 image = pipe(
     "A lonely astronaut standing on a quiet beach under two moons.",
     model_type="b16",
+    repo_id_or_path=HUB_MODEL_ID,
     guidance_scale=2.5,
     num_inference_steps=100,
-    torch_dtype=torch.bfloat16,
 ).images[0]
 image.save("minit2i-b16.png")
 
 image = pipe(
     "a transparent green backpack on a marble pedestal, with notebooks and a metal water bottle visible inside",
     model_type="l16",
+    repo_id_or_path=HUB_MODEL_ID,
     guidance_scale=6.0,
     num_inference_steps=100,
-    torch_dtype=torch.bfloat16,
 ).images[0]
 image.save("minit2i-l16.png")
+```
+
+You can also import the pipeline module directly:
+
+```python
+from diffusers.pipelines.minit2i.pipeline_minit2i import MiniT2ITextToImagePipeline
 ```
 
 Supported aliases include:

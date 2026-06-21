@@ -6,6 +6,16 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from ..._hf import load_hf_diffusers_submodules
+
+_hf = load_hf_diffusers_submodules(
+    "configuration_utils",
+    "models.modeling_utils",
+)
+ConfigMixin = _hf["configuration_utils"].ConfigMixin
+register_to_config = _hf["configuration_utils"].register_to_config
+ModelMixin = _hf["models.modeling_utils"].ModelMixin
+
 
 def modulate(x, shift, scale):
     return x * (1 + scale[:, None, :]) + shift[:, None, :]
@@ -267,7 +277,10 @@ class MMJiT(nn.Module):
         self.t_embedder = TimestepEmbedder(cfg.cond_vec_size)
         self.pooled_embedder = nn.Linear(cfg.txt_input_size, cfg.cond_vec_size, bias=False)
         self.txt_preamble_blocks = nn.ModuleList(
-            [PlainTextTransformerBlock(cfg.txt_hidden_size, cfg.num_heads, cfg.head_dim, cfg.mlp_ratio) for _ in range(cfg.txt_preamble_depth)]
+            [
+                PlainTextTransformerBlock(cfg.txt_hidden_size, cfg.num_heads, cfg.head_dim, cfg.mlp_ratio)
+                for _ in range(cfg.txt_preamble_depth)
+            ]
         )
         self.double_blocks = nn.ModuleList(
             [
@@ -332,7 +345,11 @@ class DiffusionModel(nn.Module):
         out = self.pred_velocity(xx, tt, yy, mm)
         cond, uncond = out[:b], out[b:]
         use_cfg = ((t >= self.cfg.cfg_interval[0]) & (t <= self.cfg.cfg_interval[1])).to(out.dtype)
-        scale = torch.where(use_cfg[:, None, None, None] > 0, torch.tensor(cfg_scale, device=x.device, dtype=out.dtype), torch.tensor(1.0, device=x.device, dtype=out.dtype))
+        scale = torch.where(
+            use_cfg[:, None, None, None] > 0,
+            torch.tensor(cfg_scale, device=x.device, dtype=out.dtype),
+            torch.tensor(1.0, device=x.device, dtype=out.dtype),
+        )
         return uncond + (cond - uncond) * scale
 
     @torch.no_grad()
@@ -341,13 +358,19 @@ class DiffusionModel(nn.Module):
         device = text.device
         dtype = next(self.parameters()).dtype
         x = torch.randn(
-            b, self.cfg.in_channels, self.cfg.image_size, self.cfg.image_size,
-            generator=generator, device=device, dtype=dtype,
+            b,
+            self.cfg.in_channels,
+            self.cfg.image_size,
+            self.cfg.image_size,
+            generator=generator,
+            device=device,
+            dtype=dtype,
         ) * 2
         timesteps = torch.linspace(0.0, 1.0, self.cfg.n_T + 1, device=device, dtype=dtype)
         iterator = range(self.cfg.n_T)
         if progress:
             from tqdm.auto import tqdm
+
             iterator = tqdm(iterator)
         for i in iterator:
             t_cur = timesteps[i].expand(b)
@@ -355,3 +378,71 @@ class DiffusionModel(nn.Module):
             v = self.cfg_velocity(x, t_cur, text.to(dtype), mask.to(dtype), cfg_scale)
             x = x + (t_next - t_cur)[:, None, None, None] * v
         return x
+
+
+class MiniT2IMMJiTModel(ModelMixin, ConfigMixin):
+    """MiniT2I MM-JiT transformer for pixel-space flow matching."""
+
+    config_name = "config.json"
+
+    @register_to_config
+    def __init__(
+        self,
+        image_size: int = 512,
+        patch_size: int = 16,
+        in_channels: int = 3,
+        txt_input_size: int = 1024,
+        hidden_size: int = 768,
+        txt_hidden_size: int = 768,
+        cond_vec_size: int = 768,
+        depth_double: int = 17,
+        txt_preamble_depth: int = 2,
+        num_heads: int = 12,
+        head_dim: int = 64,
+        mlp_ratio: float = 2.6666666666666665,
+        pca_channels: int = 128,
+        prompt_length: int = 256,
+        n_T: int = 100,
+        prediction: str = "x",
+        sampler: str = "euler",
+        cfg_channels: int = 3,
+        cfg_interval: tuple = (0.0, 1.0),
+        llm: str = "google/flan-t5-large",
+    ):
+        super().__init__()
+        cfg = MMJiTConfig(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            txt_input_size=txt_input_size,
+            hidden_size=hidden_size,
+            txt_hidden_size=txt_hidden_size,
+            cond_vec_size=cond_vec_size,
+            depth_double=depth_double,
+            txt_preamble_depth=txt_preamble_depth,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            mlp_ratio=mlp_ratio,
+            pca_channels=pca_channels,
+            prompt_length=prompt_length,
+            n_T=n_T,
+            prediction=prediction,
+            sampler=sampler,
+            cfg_channels=cfg_channels,
+            cfg_interval=tuple(cfg_interval),
+            llm=llm,
+        )
+        self.model = DiffusionModel(cfg)
+
+    @property
+    def mmjit_config(self) -> MMJiTConfig:
+        return self.model.cfg
+
+    def forward(self, img, t, context, attn_mask):
+        return self.model.net(img, t, context, attn_mask)
+
+    def pred_velocity(self, x, t, text, mask):
+        return self.model.pred_velocity(x, t, text, mask)
+
+    def sample(self, text, mask, cfg_scale=6.0, generator=None, progress=False):
+        return self.model.sample(text, mask, cfg_scale=cfg_scale, generator=generator, progress=progress)
