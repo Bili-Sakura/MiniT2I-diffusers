@@ -10,8 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-DIFFUSERS_DIR = Path(__file__).resolve().parents[1] / "diffusers"
-sys.path.insert(0, str(DIFFUSERS_DIR))
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 os.environ.setdefault("USE_FLAX", "0")
 os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
@@ -29,7 +30,9 @@ from torchvision import transforms
 from transformers import AutoTokenizer, T5EncoderModel
 from transformers import logging as transformers_logging
 
-from pipeline import MiniT2IFlowMatchScheduler, MiniT2IMMJiTModel
+from diffusers._hf import load_hf_diffusers_submodule
+from diffusers.models.transformers.transformer_minit2i import MiniT2IMMJiTModel
+from diffusers.schedulers.scheduling_minit2i import MiniT2IFlowMatchScheduler
 
 transformers_logging.set_verbosity_error()
 logger = get_logger(__name__)
@@ -651,7 +654,7 @@ def save_training_metadata(args, model_source, lora_info):
 
 def build_lr_scheduler(args, optimizer, accelerator: Accelerator):
     try:
-        from diffusers.optimization import get_scheduler
+        get_scheduler = load_hf_diffusers_submodule("optimization").get_scheduler
     except Exception:
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
     return get_scheduler(

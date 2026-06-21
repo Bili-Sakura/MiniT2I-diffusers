@@ -14,7 +14,10 @@ import torch.distributed as dist
 from PIL import Image
 from transformers import AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from mini_t2i.train import build_model, build_text_encoder, encode_text, load_checkpoint_if_available
 from mini_t2i.config import TrainConfig
@@ -268,11 +271,11 @@ def main() -> None:
         return
 
     if args.hf_model_id:
-        from diffusers import DiffusionPipeline
+        from diffusers.pipelines.minit2i.pipeline_minit2i import MiniT2ITextToImagePipeline
 
-        pipe = DiffusionPipeline.from_pretrained(
+        pipe = MiniT2ITextToImagePipeline.from_pretrained(
             args.hf_model_id,
-            custom_pipeline=args.hf_model_id,
+            model_type=args.model_type,
             torch_dtype=dtype,
             cache_dir=args.cache_dir,
         )
