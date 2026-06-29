@@ -62,7 +62,7 @@ For checkpoints, please refer to the [Hugging Face repository](https://huggingfa
 ├── main.py                     # unified train/eval entry point
 ├── setup.py                    # installable diffusers-style MiniT2I package
 ├── configs/                    # pretraining, fine-tuning, and eval configs
-├── src/diffusers/              # native diffusers integration (models, schedulers, pipelines)
+├── src/diffusers/              # native diffusers integration (models, pipelines, training helpers)
 ├── scripts/                    # checkpoint conversion and sampling helpers
 ├── mini_t2i/                   # PyTorch training and benchmark evaluation code
 ├── lora/                       # LoRA adaptation entry points

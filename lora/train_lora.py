@@ -32,7 +32,11 @@ from transformers import logging as transformers_logging
 
 from diffusers._hf import load_hf_diffusers_submodule
 from diffusers.models.transformers.transformer_minit2i import MiniT2IMMJiTModel
-from diffusers.schedulers.scheduling_minit2i import MiniT2IFlowMatchScheduler
+from diffusers.training_timesteps import (
+    MiniT2ITrainingTimestepConfig,
+    load_training_timestep_config,
+    sample_train_timesteps,
+)
 
 transformers_logging.set_verbosity_error()
 logger = get_logger(__name__)
@@ -248,14 +252,12 @@ def load_hf_transformer(
     return transformer, transformer.mmjit_config
 
 
-def load_or_create_scheduler(args) -> MiniT2IFlowMatchScheduler:
-    if args.scheduler_dir:
-        return MiniT2IFlowMatchScheduler.from_pretrained(args.scheduler_dir)
-    return MiniT2IFlowMatchScheduler(
+def load_or_create_training_timestep_config(args) -> MiniT2ITrainingTimestepConfig:
+    return load_training_timestep_config(
+        args.scheduler_dir,
         train_t_schedule=args.t_schedule,
         t_lognorm_mu=args.t_lognorm_mu,
         t_lognorm_sigma=args.t_lognorm_sigma,
-        num_inference_steps=args.validation_steps,
     )
 
 
@@ -269,8 +271,8 @@ def load_minit2i_model_components(args, weight_dtype: torch.dtype):
         variant=args.variant,
         torch_dtype=weight_dtype,
     )
-    scheduler = load_or_create_scheduler(args)
-    return transformer, cfg, scheduler, model_source
+    training_timestep_config = load_or_create_training_timestep_config(args)
+    return transformer, cfg, training_timestep_config, model_source
 
 
 def load_text_components(cfg, args):
@@ -280,9 +282,9 @@ def load_text_components(cfg, args):
 
 
 def load_minit2i_components(args, weight_dtype: torch.dtype):
-    transformer, cfg, scheduler, model_source = load_minit2i_model_components(args, weight_dtype)
+    transformer, cfg, training_timestep_config, model_source = load_minit2i_model_components(args, weight_dtype)
     tokenizer, text_encoder = load_text_components(cfg, args)
-    return transformer, cfg, scheduler, tokenizer, text_encoder, model_source
+    return transformer, cfg, training_timestep_config, tokenizer, text_encoder, model_source
 
 
 def parse_target_modules(text: Optional[str]) -> List[str]:
@@ -493,9 +495,15 @@ def encode_batch_prompts(tokenizer, text_encoder, captions, cfg, device, weight_
     return prompt_embeds.to(dtype=weight_dtype), attention_mask.to(device)
 
 
-def compute_minit2i_loss(transformer, scheduler, images, prompt_embeds, attention_mask, args, weight_dtype, train_generator=None):
+def compute_minit2i_loss(transformer, training_timestep_config, images, prompt_embeds, attention_mask, args, weight_dtype, train_generator=None):
     batch_size = images.shape[0]
-    t = scheduler.sample_train_timesteps(batch_size, device=images.device, dtype=weight_dtype, generator=train_generator)
+    t = sample_train_timesteps(
+        batch_size,
+        device=images.device,
+        config=training_timestep_config,
+        dtype=weight_dtype,
+        generator=train_generator,
+    )
     noise = torch.randn(
         images.shape,
         device=images.device,
@@ -687,7 +695,7 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    transformer, cfg, scheduler, tokenizer, text_encoder, model_source = load_minit2i_components(args, weight_dtype)
+    transformer, cfg, training_timestep_config, tokenizer, text_encoder, model_source = load_minit2i_components(args, weight_dtype)
     transformer.requires_grad_(False)
     text_encoder.requires_grad_(False)
     lora_info = add_lora_adapters(transformer, args)
@@ -770,7 +778,7 @@ def main():
                 )
                 loss, loss_logs = compute_minit2i_loss(
                     transformer=transformer,
-                    scheduler=scheduler,
+                    training_timestep_config=training_timestep_config,
                     images=images,
                     prompt_embeds=prompt_embeds,
                     attention_mask=attention_mask,

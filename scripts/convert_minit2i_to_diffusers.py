@@ -16,8 +16,12 @@ SRC_ROOT = LIB_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from diffusers._hf import load_hf_diffusers_submodule
 from diffusers.models.transformers.transformer_minit2i import MMJiTConfig, MiniT2IMMJiTModel
-from diffusers.schedulers.scheduling_minit2i import MiniT2IFlowMatchScheduler
+
+FlowMatchEulerDiscreteScheduler = load_hf_diffusers_submodule(
+    "schedulers.scheduling_flow_match_euler_discrete"
+).FlowMatchEulerDiscreteScheduler
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="lognorm",
         choices=["uniform", "lognorm"],
-        help="Training timestep schedule for exported scheduler",
+        help="Training timestep schedule metadata stored in model_index.json",
     )
     parser.add_argument("--t-lognorm-mu", type=float, default=-0.8)
     parser.add_argument("--t-lognorm-sigma", type=float, default=0.8)
@@ -60,11 +64,10 @@ def main() -> None:
     transformer_dir.mkdir(parents=True, exist_ok=True)
     transformer.save_pretrained(transformer_dir)
 
-    scheduler = MiniT2IFlowMatchScheduler(
-        train_t_schedule=args.train_t_schedule,
-        t_lognorm_mu=args.t_lognorm_mu,
-        t_lognorm_sigma=args.t_lognorm_sigma,
-        num_inference_steps=args.num_inference_steps,
+    scheduler = FlowMatchEulerDiscreteScheduler(
+        num_train_timesteps=1000,
+        shift=1.0,
+        stochastic_sampling=False,
     )
     scheduler_dir.mkdir(parents=True, exist_ok=True)
     scheduler.save_pretrained(scheduler_dir)
@@ -72,7 +75,11 @@ def main() -> None:
     model_index = {
         "_class_name": "MiniT2ITextToImagePipeline",
         "_diffusers_version": "0.32.0",
-        "scheduler": ["diffusers", "MiniT2IFlowMatchScheduler"],
+        "default_num_inference_steps": args.num_inference_steps,
+        "train_t_schedule": args.train_t_schedule,
+        "t_lognorm_mu": args.t_lognorm_mu,
+        "t_lognorm_sigma": args.t_lognorm_sigma,
+        "scheduler": ["diffusers", "FlowMatchEulerDiscreteScheduler"],
         "text_encoder": ["transformers", "T5EncoderModel"],
         "tokenizer": ["transformers", "AutoTokenizer"],
         "transformer": ["diffusers", "MiniT2IMMJiTModel"],
